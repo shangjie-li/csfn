@@ -1,0 +1,29 @@
+random_seed: 444
+
+dataset:
+  type: 'KITTI'
+  batch_size: 32
+  class_names: ['Car']
+  write_list: ['Car']
+  det_dir1: 'mvmm'
+  det_dir2: 'ldfmm'
+
+model:
+  type: 'CSFN'
+  filters: [16, 64, 256, 64, 16]
+
+optimizer:
+  type: 'AdamOneCycle'
+  lr: 0.003
+  weight_decay: 0.01
+
+trainer:
+  split: 'train'
+  epochs: 10
+  save_frequency: 10
+
+tester:
+  split: 'val'
+  score_thresh: 0.1
+  nms_thresh: 0.1
+  checkpoint: 'checkpoints/checkpoint_epoch_10.pth'

@@ -1,0 +1,17 @@
+.idea
+**__pycache__**
+**build**
+**egg-info**
+**dist**
+data/kitti/training
+data/kitti/testing
+data/detected_objects
+*.pyc
+*.so
+outputs
+checkpoints
+logs
+result.mp4
+result.txt
+results
+videos

@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt  # for WARNING: QApplication was not created in 
 
 import rospy
 from std_msgs.msg import Header
+from sensor_msgs.msg import Image
 from visualization_msgs.msg import Marker, MarkerArray
 
 try:
@@ -23,10 +24,14 @@ except ImportError:
 from data.kitti_dataset import KITTIDataset
 from csfn import build_model
 from helpers.checkpoint_helper import load_checkpoint
+from utils.kitti_calibration_utils import parse_calib
 from utils.opencv_vis_utils import box_colormap
+from utils.opencv_vis_utils import normalize_img
+from utils.opencv_vis_utils import draw_boxes3d
 from utils.nms_utils import nms
 
 
+image_lock = threading.Lock()
 marker_lock1 = threading.Lock()
 marker_lock2 = threading.Lock()
 
@@ -35,6 +40,8 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--cfg_file', type=str, default='data/configs/csfn.yaml',
                         help='path to the config file')
+    parser.add_argument('--display', action='store_true', default=False,
+                        help='whether to show the RGB image')
     parser.add_argument('--print', action='store_true', default=False,
                         help='whether to print results in the txt file')
     parser.add_argument('--score_thresh', type=float, default=None,
@@ -43,6 +50,8 @@ def parse_config():
                         help='NMS threshold for filtering detections')
     parser.add_argument('--checkpoint', type=str, default=None,
                         help='path to the checkpoint')
+    parser.add_argument('--sub_image', type=str, default='/kitti/camera_color_left/image_raw',
+                        help='image topic to subscribe')
     parser.add_argument('--sub_marker1', type=str, default='/det_boxes1',
                         help='marker topic to subscribe')
     parser.add_argument('--sub_marker2', type=str, default='/det_boxes2',
@@ -53,6 +62,8 @@ def parse_config():
                         help='working frequency')
     parser.add_argument('--frame_id', type=str, default=None,
                         help='frame id for ROS message (same as lidar topic by default, which is `velo_link`)')
+    parser.add_argument('--calib_file', type=str, default='data/kitti/testing/calib/000000.txt',
+                        help='path to the calibration file')
     args = parser.parse_args()
     return args
 
@@ -90,6 +101,18 @@ def publish_marker_msg(pub, boxes, labels, scores, frame_id, frame_rate, color_m
         markerarray.markers.append(marker)
         
     pub.publish(markerarray)
+
+
+def display(img, v_writer, win_name='result'):
+    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+    cv2.imshow(win_name, img)
+    v_writer.write(img)
+    key = cv2.waitKey(1)
+    if key == 27:
+        v_writer.release()
+        return False
+    else:
+        return True
 
 
 def print_info(frame, stamp, delay, boxes, labels, scores, file_name='result.txt'):
@@ -150,6 +173,15 @@ def get_boxes_from_markerarray(markerarray):
     return np.concatenate([boxes], axis=0).reshape(-1, 9)
 
 
+def image_callback(image):
+    global image_header, image_frame
+    image_lock.acquire()
+    if image_header is None:
+        image_header = image.header
+    image_frame = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)  # ndarray of uint8, [H, W, 3], BGR image
+    image_lock.release()
+
+
 def marker_callback1(markerarray):
     global marker_header1, det_boxes1
     marker_lock1.acquire()
@@ -171,6 +203,10 @@ def marker_callback2(markerarray):
 
 
 def timer_callback(event):
+    image_lock.acquire()
+    cur_image = image_frame.copy()
+    image_lock.release()
+
     marker_lock1.acquire()
     b1 = det_boxes1.copy()
     marker_lock1.release()
@@ -213,6 +249,13 @@ def timer_callback(event):
     names = [dataset.class_names[int(k)] for k in cls_ids]
 
     publish_marker_msg(pub_marker, boxes3d_lidar, names, scores, args.frame_id, args.frame_rate, box_colormap)
+
+    if args.display:
+        image = normalize_img(cur_image)
+        image = draw_boxes3d(image, calib, boxes3d_lidar, names, scores)
+        if not display(image, v_writer, win_name='result'):
+            print("\nReceived the shutdown signal.\n")
+            rospy.signal_shutdown("Everything is over now.")
 
     if args.print:
         cur_stamp = rospy.Time.now()
@@ -258,6 +301,13 @@ if __name__ == '__main__':
     torch.set_grad_enabled(False)
     model.eval()
 
+    calib_file = Path(args.calib_file)
+    assert os.path.exists(calib_file)
+    calib = parse_calib(calib_file)
+
+    image_header, image_frame = None, None
+    rospy.Subscriber(args.sub_image, Image, image_callback, queue_size=1, buff_size=52428800)
+
     marker_header1, det_boxes1 = None, None
     marker_header2, det_boxes2 = None, None
     rospy.Subscriber(args.sub_marker1, MarkerArray, marker_callback1, queue_size=1, buff_size=52428800)
@@ -269,6 +319,12 @@ if __name__ == '__main__':
 
     if args.frame_id is None:
         args.frame_id = marker_header1.frame_id
+
+    if args.display:
+        win_h, win_w = image_frame.shape[0], image_frame.shape[1]
+        v_path = 'result.mp4'
+        v_format = cv2.VideoWriter_fourcc(*"mp4v")
+        v_writer = cv2.VideoWriter(v_path, v_format, args.frame_rate, (win_w, win_h), True)
 
     if args.print:
         result_file = 'result.txt'

@@ -34,23 +34,36 @@ def visualize(dataset, frame_id, gt_boxes, det_boxes1, det_boxes2):
     image = dataset.get_image(img_id)[:, :, ::-1]  # BGR image
     image = normalize_img(image)
 
-    k = 0
+    n = 0
     img_size = (792, 240)
-    data = {frame_id: gt_boxes, 'Detections Part1': det_boxes1, 'Detections Part2': det_boxes2}
-    for key, val in data.items():
+    box_dict = {frame_id: gt_boxes, 'det_boxes1: %s' % frame_id: det_boxes1, 'det_boxes2: %s' % frame_id: det_boxes2}
+    data = {}
+    for k, v in box_dict.items():
         x = image.copy()
-        boxes, cls_ids, scores = val[:, :7], val[:, 7], val[:, 8]
+        boxes, cls_ids, scores = v[:, :7], v[:, 7], v[:, 8]
         names = [dataset.class_names[int(idx)] for idx in cls_ids]
         x = draw_boxes3d(x, calib, boxes, names, scores)
         x = cv2.resize(x, img_size)
-        cv2.namedWindow(key, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(key, img_size[0] + 100, img_size[1] + 100)
-        cv2.imshow(key, x)
-        cv2.moveWindow(key, 150, k * (img_size[1] + 100) + 10)
-        k += 1
+        data.update({k: x})
 
-    cv2.waitKey()
-    cv2.destroyAllWindows()
+        cv2.namedWindow(k, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(k, img_size[0] + 100, img_size[1] + 100)
+        cv2.imshow(k, x)
+        cv2.moveWindow(k, 150, n * (img_size[1] + 100) + 10)
+        n += 1
+
+    key = cv2.waitKey(0)
+    while key:
+        if key == 27:  # Esc
+            cv2.destroyAllWindows()
+            break
+        elif key == 13:  # Enter
+            for k, v in data.items():
+                cv2.imwrite(k + '.png', v)
+            cv2.destroyAllWindows()
+            break
+        else:
+            key = cv2.waitKey(0)
 
 
 def run(dataset, data_dict):

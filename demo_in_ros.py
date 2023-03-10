@@ -62,21 +62,19 @@ def parse_config():
                         help='marker topic to publish')
     parser.add_argument('--frame_rate', type=int, default=10,
                         help='working frequency')
-    parser.add_argument('--frame_id', type=str, default=None,
-                        help='frame id for ROS message (same as lidar topic by default, which is `velo_link`)')
+    parser.add_argument('--frame_id', type=str, default='velo_link',
+                        help='frame id for ROS message')
     parser.add_argument('--calib_file', type=str, default='data/kitti/testing/calib/000000.txt',
                         help='path to the calibration file')
     args = parser.parse_args()
     return args
 
 
-def publish_marker_msg(pub, boxes, labels, scores, frame_id, frame_rate, color_map):
-    markerarray = MarkerArray()
+def publish_marker_msg(pub, boxes, labels, scores, header, frame_rate, color_map):
+    marker_array = MarkerArray()
     for i in range(boxes.shape[0]):
         marker = Marker()
-        marker.header = Header()
-        marker.header.frame_id = frame_id
-        marker.header.stamp = rospy.Time.now()
+        marker.header = header
         marker.ns = labels[i]
         marker.id = i
         marker.type = Marker.CUBE
@@ -100,9 +98,9 @@ def publish_marker_msg(pub, boxes, labels, scores, frame_id, frame_rate, color_m
         marker.color.a = scores[i]  # 0 for invisible
         
         marker.lifetime = rospy.Duration(1 / frame_rate)
-        markerarray.markers.append(marker)
+        marker_array.markers.append(marker)
         
-    pub.publish(markerarray)
+    pub.publish(marker_array)
 
 
 def display(img, v_writer, win_name='result'):
@@ -151,11 +149,11 @@ def create_input_data(dataset, b1, b2, frame_id):
     return data_dict
 
 
-def get_boxes_from_markerarray(markerarray):
-    num_objs = len(markerarray.markers)
+def get_boxes_from_marker_array(marker_array):
+    num_objs = len(marker_array.markers)
     boxes = []
     for i in range(num_objs):
-        marker = markerarray.markers[i]
+        marker = marker_array.markers[i]
         label = marker.ns
         if label not in dataset.class_names: continue
 
@@ -169,52 +167,116 @@ def get_boxes_from_markerarray(markerarray):
 
         cls_id = dataset.cls_to_id[label]
         score = marker.color.a
-        box = np.array([x, y, z, l, w, h, phi, cls_id, score], dtype=np.float32)
-        boxes.append(box.reshape(-1, 9))
+        boxes.append([x, y, z, l, w, h, phi, cls_id, score])
 
-    return np.concatenate([boxes], axis=0).reshape(-1, 9)
+    return np.array(boxes, dtype=np.float32).reshape(-1, 9)
 
 
 def image_callback(image):
-    global image_header, image_frame
+    global image_header_list, image_frame_list
     image_lock.acquire()
-    if image_header is None:
-        image_header = image.header
-    image_frame = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)  # ndarray of uint8, [H, W, 3], BGR image
+    cur_header = image.header
+    cur_frame = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)  # ndarray of uint8, [H, W, 3], BGR image
+
+    if len(image_header_list) == keep_topics:
+        image_header_list.pop(0)
+        image_frame_list.pop(0)
+    image_header_list.append(cur_header)
+    image_frame_list.append(cur_frame)
+
+    assert len(image_header_list) <= keep_topics
+    assert len(image_header_list) == len(image_frame_list)
     image_lock.release()
 
 
-def marker_callback1(markerarray):
-    global marker_header1, det_boxes1
+def marker_callback1(marker_array):
+    global header1_list, det1_list
     marker_lock1.acquire()
-    if marker_header1 is None:
-        if len(markerarray.markers) > 0:
-            marker_header1 = markerarray.markers[0].header
-    det_boxes1 = get_boxes_from_markerarray(markerarray)
+    cur_frame = get_boxes_from_marker_array(marker_array)
+
+    if len(marker_array.markers) > 0:
+        cur_header = marker_array.markers[0].header
+    else:
+        cur_header = Header()
+        cur_header.frame_id = args.frame_id
+        cur_header.stamp = rospy.Time.now()
+
+    if len(header1_list) == keep_topics:
+        header1_list.pop(0)
+        det1_list.pop(0)
+    header1_list.append(cur_header)
+    det1_list.append(cur_frame)
+
+    assert len(header1_list) <= keep_topics
+    assert len(header1_list) == len(det1_list)
     marker_lock1.release()
 
 
-def marker_callback2(markerarray):
-    global marker_header2, det_boxes2
+def marker_callback2(marker_array):
+    global header2_list, det2_list
     marker_lock2.acquire()
-    if marker_header2 is None:
-        if len(markerarray.markers) > 0:
-            marker_header2 = markerarray.markers[0].header
-    det_boxes2 = get_boxes_from_markerarray(markerarray)
+    cur_frame = get_boxes_from_marker_array(marker_array)
+
+    if len(marker_array.markers) > 0:
+        cur_header = marker_array.markers[0].header
+    else:
+        cur_header = Header()
+        cur_header.frame_id = args.frame_id
+        cur_header.stamp = rospy.Time.now()
+
+    if len(header2_list) == keep_topics:
+        header2_list.pop(0)
+        det2_list.pop(0)
+    header2_list.append(cur_header)
+    det2_list.append(cur_frame)
+
+    assert len(header2_list) <= keep_topics
+    assert len(header2_list) == len(det2_list)
     marker_lock2.release()
 
 
+def get_normalized_time(stamp):
+    return stamp.secs + 0.000000001 * stamp.nsecs
+
+
+def find_min_error(ego_time, ref_times):
+    x = np.abs(np.array(ref_times) - ego_time)
+    return x.min(), x.argmin()
+
+
+def select_topic_idx(ego_headers, headers1, headers2):
+    times1 = np.array([get_normalized_time(h.stamp) for h in headers1])
+    times2 = np.array([get_normalized_time(h.stamp) for h in headers2])
+
+    for i, h in enumerate(ego_headers):
+        cur_time = get_normalized_time(h.stamp)
+        m1, argm1 = find_min_error(cur_time, times1)
+        m2, argm2 = find_min_error(cur_time, times2)
+        if m1 == 0 and m2 == 0:
+            return i, argm1, argm2
+
+    cur_time = get_normalized_time(ego_headers[0].stamp)
+    m1, argm1 = find_min_error(cur_time, times1)
+    m2, argm2 = find_min_error(cur_time, times2)
+    return 0, argm1, argm2
+
+
 def timer_callback(event):
+    cur_header = Header()
+
     image_lock.acquire()
-    cur_image = image_frame.copy()
-    image_lock.release()
-
     marker_lock1.acquire()
-    b1 = det_boxes1.copy()
-    marker_lock1.release()
-
     marker_lock2.acquire()
-    b2 = det_boxes2.copy()
+
+    image_idx, idx1, idx2 = select_topic_idx(image_header_list, header1_list, header2_list)
+    cur_header.frame_id = image_header_list[image_idx].frame_id
+    cur_header.stamp = image_header_list[image_idx].stamp
+    cur_image = image_frame_list[image_idx].copy()
+    b1 = det1_list[idx1].copy()
+    b2 = det2_list[idx2].copy()
+
+    image_lock.release()
+    marker_lock1.release()
     marker_lock2.release()
 
     global frame
@@ -253,7 +315,7 @@ def timer_callback(event):
     boxes3d_lidar, cls_ids, scores = boxes3d_lidar[indices], cls_ids[indices], scores[indices]
     names = [dataset.class_names[int(k)] for k in cls_ids]
 
-    publish_marker_msg(pub_marker, boxes3d_lidar, names, scores, args.frame_id, args.frame_rate, box_colormap)
+    publish_marker_msg(pub_marker, boxes3d_lidar, names, scores, cur_header, args.frame_rate, box_colormap)
 
     if args.display:
         image = normalize_img(cur_image)
@@ -263,8 +325,8 @@ def timer_callback(event):
             rospy.signal_shutdown("Everything is over now.")
 
     if args.print:
-        cur_stamp = rospy.Time.now()
-        cur_stamp = cur_stamp.secs + 0.000000001 * cur_stamp.nsecs
+        stamp = rospy.Time.now()
+        cur_stamp = get_normalized_time(stamp)
         delay = round(time.time() - start, 3)
         print_info(frame, cur_stamp, delay, boxes3d_lidar, names, scores, result_file)
 
@@ -312,23 +374,22 @@ if __name__ == '__main__':
     assert os.path.exists(calib_file)
     calib = parse_calib(calib_file)
 
-    image_header, image_frame = None, None
+    keep_topics = 10
+
+    image_header_list, image_frame_list = [], []
     rospy.Subscriber(args.sub_image, Image, image_callback, queue_size=1, buff_size=52428800)
 
-    marker_header1, det_boxes1 = None, None
-    marker_header2, det_boxes2 = None, None
+    header1_list, det1_list = [], []
+    header2_list, det2_list = [], []
     rospy.Subscriber(args.sub_marker1, MarkerArray, marker_callback1, queue_size=1, buff_size=52428800)
     rospy.Subscriber(args.sub_marker2, MarkerArray, marker_callback2, queue_size=1, buff_size=52428800)
     print('==> Waiting for topic %s and %s...' % (args.sub_marker1, args.sub_marker2))
-    while marker_header1 is None or marker_header2 is None:
+    while len(header1_list) < keep_topics or len(header2_list) < keep_topics:
         time.sleep(0.1)
     print('==> Done.')
 
-    if args.frame_id is None:
-        args.frame_id = marker_header1.frame_id
-
     if args.display:
-        win_h, win_w = image_frame.shape[0], image_frame.shape[1]
+        win_h, win_w = image_frame_list[0].shape[0], image_frame_list[0].shape[1]
         v_path = 'result.mp4'
         v_format = cv2.VideoWriter_fourcc(*"mp4v")
         v_writer = cv2.VideoWriter(v_path, v_format, args.frame_rate, (win_w, win_h), True)

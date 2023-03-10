@@ -383,8 +383,8 @@ if __name__ == '__main__':
     header2_list, det2_list = [], []
     rospy.Subscriber(args.sub_marker1, MarkerArray, marker_callback1, queue_size=1, buff_size=52428800)
     rospy.Subscriber(args.sub_marker2, MarkerArray, marker_callback2, queue_size=1, buff_size=52428800)
-    print('==> Waiting for topic %s and %s...' % (args.sub_marker1, args.sub_marker2))
-    while len(header1_list) < keep_topics or len(header2_list) < keep_topics:
+    print('==> Waiting for topic %s, %s and %s...' % (args.sub_image, args.sub_marker1, args.sub_marker2))
+    while len(image_header_list) < keep_topics or len(header1_list) < keep_topics or len(header2_list) < keep_topics:
         time.sleep(0.1)
     print('==> Done.')
 

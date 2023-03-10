@@ -30,13 +30,21 @@ class KITTIDataset(torch.utils.data.Dataset):
         self.det_dir2 = os.path.join('data/detected_objects', cfg['det_dir2'], self.split)
 
         self.class_names = cfg['class_names']
+        self.write_list = cfg['write_list']
         self.cls_to_id = {}
         for i, name in enumerate(self.class_names):
             self.cls_to_id[name] = i
-        self.write_list = cfg['write_list']
+
+        self.bev_iou_thresholds = {}
+        for x in cfg['bev_iou_thresholds']:
+            class_name, thresh = x.split(':')
+            if class_name not in self.class_names:
+                continue
+            self.bev_iou_thresholds[class_name] = float(thresh)
+
         self.max_objs = 30
         self.num_features = 4  # [bev_iou, ego_score, ref_score, distance]
-        self.bev_iou_thresh = 0.25
+        self.bonus = cfg['bonus']
 
     def get_image(self, idx):
         img_file = os.path.join(self.image_dir, '%06d.png' % idx)
@@ -155,7 +163,7 @@ class KITTIDataset(torch.utils.data.Dataset):
                 continue
 
             bev_iou = boxes_bev_iou_cpu(e_boxes, r_boxes)  # [num_e, num_r]
-            m = self.get_matching_matrix(bev_iou, self.bev_iou_thresh)
+            m = self.get_matching_matrix(bev_iou, self.bev_iou_thresholds[name])
             for i in range(num_e):
                 if m[i].sum() > 0:
                     assigned_r_ind = np.where(m[i] > 0)[0][0]
@@ -197,16 +205,16 @@ class KITTIDataset(torch.utils.data.Dataset):
                 continue
 
             bev_iou = boxes_bev_iou_cpu(e_boxes, g_boxes)  # [num_e, num_g]
-            m = self.get_matching_matrix(bev_iou, self.bev_iou_thresh)
+            m = self.get_matching_matrix(bev_iou, self.bev_iou_thresholds[name])
             for i in range(num_e):
                 if m[i].sum() > 0:
                     assigned_g_ind = np.where(m[i] > 0)[0][0]
                     x = boxes_bev_iou_cpu(r_boxes[i].reshape(-1, 7), g_boxes[assigned_g_ind].reshape(-1, 7))[0][0]
-                    if x >= self.bev_iou_thresh:
+                    if x >= self.bev_iou_thresholds[name]:
                         if x > bev_iou[i][assigned_g_ind]:
                             targets[i] = 0  # if the ref model has higher iou, suppress the ego model's result
                         else:
-                            targets[i] += 0.2  # otherwise, improve the confidence of the ego model's result
+                            targets[i] += self.bonus  # otherwise, improve the confidence of the ego model's result
             all_targets.append(targets)
 
         all_targets = np.concatenate(all_targets, axis=0)  # [num_objs]

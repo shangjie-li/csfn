@@ -3,10 +3,12 @@ random_seed: 444
 dataset:
   type: 'KITTI'
   batch_size: 32
-  class_names: ['Car']
-  write_list: ['Car']
+  class_names: ['Car', 'Pedestrian', 'Cyclist']
+  write_list: ['Car', 'Pedestrian', 'Cyclist']
   det_dir1: 'mvmm'
   det_dir2: 'ldfmm'
+  bev_iou_thresholds: ['Car:0.25', 'Pedestrian:0.1', 'Cyclist:0.1']
+  bonus: 0.3
 
 model:
   type: 'CSFN'

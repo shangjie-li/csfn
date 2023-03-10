@@ -41,9 +41,11 @@ def decode_detections(dataset, data_dict, mode):
     if mode == 1:
         b1 = data_dict['det_boxes1']
         b2 = data_dict['det_boxes2']
-        b1 = b1[np.sqrt(b1[:, 0] ** 2 + b1[:, 1] ** 2) < 60]
-        b2 = b2[np.sqrt(b2[:, 0] ** 2 + b2[:, 1] ** 2) >= 60]
-        boxes = np.concatenate([b1, b2], axis=0)
+        b1_car, b1_ped_cyc = b1[b1[:, 7] == 0], b1[b1[:, 7] != 0]
+        b2_car = b2[b2[:, 7] == 0]
+        b1_car = b1_car[np.sqrt(b1_car[:, 0] ** 2 + b1_car[:, 1] ** 2) < 60]
+        b2_car = b2_car[np.sqrt(b2_car[:, 0] ** 2 + b2_car[:, 1] ** 2) >= 60]
+        boxes = np.concatenate([b1_car, b1_ped_cyc, b2_car], axis=0)
         boxes3d_lidar, cls_ids, scores = boxes[:, :7], boxes[:, 7], boxes[:, 8]
 
     elif mode == 2:

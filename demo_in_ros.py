@@ -50,6 +50,8 @@ def parse_config():
                         help='NMS threshold for filtering detections')
     parser.add_argument('--checkpoint', type=str, default=None,
                         help='path to the checkpoint')
+    parser.add_argument('--current_classes', type=str, default='0,1,2',
+                        help='a filter for desired classes, e.g., 0,1,2 (split by a comma)')
     parser.add_argument('--sub_image', type=str, default='/kitti/camera_color_left/image_raw',
                         help='image topic to subscribe')
     parser.add_argument('--sub_marker1', type=str, default='/det_boxes1',
@@ -246,6 +248,9 @@ def timer_callback(event):
     scores = selected_scores.cpu().numpy()
     scores = np.clip(scores, a_min=0.0, a_max=1.0)
     boxes3d_lidar, cls_ids = boxes3d_lidar[selected], cls_ids[selected]
+
+    indices = [i for i, cls_id in enumerate(cls_ids) if cls_id in args.current_classes]
+    boxes3d_lidar, cls_ids, scores = boxes3d_lidar[indices], cls_ids[indices], scores[indices]
     names = [dataset.class_names[int(k)] for k in cls_ids]
 
     publish_marker_msg(pub_marker, boxes3d_lidar, names, scores, args.frame_id, args.frame_rate, box_colormap)
@@ -275,6 +280,8 @@ if __name__ == '__main__':
         cfg['tester']['nms_thresh'] = args.nms_thresh
     if args.checkpoint is not None:
         cfg['tester']['checkpoint'] = args.checkpoint
+
+    args.current_classes = list(map(int, args.current_classes.split(',')))
 
     rospy.init_node("csfn", anonymous=True, disable_signals=True)
     frame = 0

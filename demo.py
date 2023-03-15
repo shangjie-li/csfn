@@ -26,6 +26,10 @@ def parse_config():
                         help='path to the config file')
     parser.add_argument('--split', type=str, default=None,
                         help='must be chosen from ["train", "val", "trainval", "test"]')
+    parser.add_argument('--score_thresh_b1', type=float, default=None,
+                        help='score threshold for filtering detections from input boxes1')
+    parser.add_argument('--score_thresh_b2', type=float, default=None,
+                        help='score threshold for filtering detections from input boxes2')
     parser.add_argument('--score_thresh', type=float, default=None,
                         help='score threshold for filtering detections')
     parser.add_argument('--nms_thresh', type=float, default=None,
@@ -38,7 +42,28 @@ def parse_config():
     return args
 
 
-def run(model, dataset, cfg, data_dict, device):
+def run(model, dataset, args, cfg, data_dict, device):
+    if args.score_thresh_b1 or args.score_thresh_b2:
+        img_id = int(data_dict['frame_id'])
+        calib = dataset.get_calib(img_id)
+
+        b1 = dataset.get_objects(img_id, dataset.det_dir1, calib)  # [M1, 9]
+        b2 = dataset.get_objects(img_id, dataset.det_dir2, calib)  # [M2, 9]
+
+        b1 = b1[b1[:, -1] >= args.score_thresh_b1] if args.score_thresh_b1 else b1
+        b2 = b2[b2[:, -1] >= args.score_thresh_b2] if args.score_thresh_b2 else b2
+
+        x1, mask1, _ = dataset.get_inputs(b1, b2)
+        x2, mask2, _ = dataset.get_inputs(b2, b1)
+        data_dict.update({
+            'det_boxes1': b1,
+            'det_boxes2': b2,
+            'x1': x1[None, :, :].transpose(2, 0, 1),  # [num_features, 1, max_objs]
+            'x2': x2[None, :, :].transpose(2, 0, 1),  # [num_features, 1, max_objs]
+            'mask1': mask1,  # [max_objs]
+            'mask2': mask2,  # [max_objs]
+        })
+
     frame_id = data_dict['frame_id']
     max_objs = dataset.max_objs
 
@@ -112,10 +137,10 @@ if __name__ == '__main__':
     if args.sample_idx is not None:
         assert args.sample_idx in dataset.id_list
         i = dataset.id_list.index(args.sample_idx)
-        run(model, dataset, cfg, dataset[i], device)
+        run(model, dataset, args, cfg, dataset[i], device)
     else:
         progress_bar = tqdm.tqdm(total=len(dataset), dynamic_ncols=True, leave=True, desc='samples')
         for i in range(len(dataset)):
-            run(model, dataset, cfg, dataset[i], device)
+            run(model, dataset, args, cfg, dataset[i], device)
             progress_bar.update()
         progress_bar.close()

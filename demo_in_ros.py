@@ -269,8 +269,8 @@ def timer_callback(event):
     marker_lock2.acquire()
 
     image_idx, idx1, idx2 = select_topic_idx(image_header_list, header1_list, header2_list)
-    cur_header.frame_id = image_header_list[image_idx].frame_id
-    cur_header.stamp = image_header_list[image_idx].stamp
+    cur_header.frame_id = header1_list[idx1].frame_id
+    cur_header.stamp = header1_list[idx1].stamp
     cur_image = image_frame_list[image_idx].copy()
     b1 = det1_list[idx1].copy()
     b2 = det2_list[idx2].copy()
